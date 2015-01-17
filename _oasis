@@ -1,0 +1,18 @@
+OASISFormat: 0.4
+Name:        opam-mirror
+Version:     1.0.0
+Synopsis:    Mirror upstream distfiles in an OPAM repository
+Authors:     Anil Madhavapeddy
+Maintainers: Anil Madhavapeddy <anil@recoil.org>
+Homepage:    https://github.com/avsm/opam-mirror
+License:     ISC
+Plugins:     META (0.4), DevFiles (0.4)
+BuildTools:  ocamlbuild
+
+Executable "opam-mirror"
+  Path:               .
+  MainIs:             mirror.ml
+  Custom:             true
+  CompiledObject:     best
+  Install:            true
+  BuildDepends:       cmdliner, cohttp.lwt, opam-lib, lwt.unix
