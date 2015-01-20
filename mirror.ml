@@ -18,21 +18,23 @@
 let get_urls dir =
   let repo = OpamRepository.local (OpamFilename.Dir.of_string dir) in
   let packages = OpamRepository.packages_with_prefixes repo in
-  let r =
-    OpamPackage.Map.fold (fun nv prefix map ->
+  OpamPackage.Map.fold
+    (fun nv prefix map ->
+      let name = OpamPackage.(Name.to_string (name nv)) in
+      if name <> "mirage" then map else begin
       let subdir =
-        Printf.sprintf "distfiles/%s/%s.%s/"
-          (OpamPackage.(Name.to_string (name nv)))
-          (OpamPackage.(Name.to_string (name nv)))
+        Printf.sprintf "distfiles/%s/%s.%s/" name name
           (OpamPackage.(Version.to_string (version nv))) in
       let url_file = OpamPath.Repository.url repo prefix nv in 
       match OpamFilename.exists url_file with
       | true ->
-        let (address,_) = OpamFile.URL.url (OpamFile.URL.read url_file) in 
-        (subdir, (Uri.of_string address)) :: map
+        let file = OpamFile.URL.read url_file in
+        let address = fst (OpamFile.URL.url file) |> Uri.of_string in 
+        let checksum = OpamFile.URL.checksum file in
+        (subdir, address, checksum) :: map
       | false -> map
-    ) packages [] in
-  r
+end
+    ) packages []
 
 open Lwt
 open Printf
@@ -47,13 +49,12 @@ let rec mkdir_p dir =
   | false ->
     mkdir_p (Filename.dirname dir) >>= fun () ->
     (try Unix.mkdir dir 0o700 
-    with Unix.Unix_error (Unix.EEXIST,_,_) -> ());
+     with Unix.Unix_error (Unix.EEXIST,_,_) -> ());
     return_unit
 
-let rec fetch ofile uri =
+let rec fetch ofile uri checksum =
   let url = Uri.to_string uri in
-  Cohttp_lwt_unix.Client.get uri
-  >>= fun (resp,body) ->
+  Cohttp_lwt_unix.Client.get uri >>= fun (resp,body) ->
   match Cohttp.Response.status resp with 
   | `OK ->
     eprintf "%s %s\n%!" (yellow "GET:") url;
@@ -62,12 +63,21 @@ let rec fetch ofile uri =
          Cohttp_lwt_body.to_stream body
          |> Lwt_stream.iter_s (Lwt_io.write oc))
     >>= fun () ->
-    eprintf "%s %s\n%!" (green "OK: ") ofile;
+    begin match checksum with
+    | None -> eprintf "%s No checksum for %s\n%!" (yellow "MD5:") ofile
+    | Some c ->
+      let md5 = Digest.(to_hex (file ofile)) in
+      if md5 <> c then
+        eprintf "%s Checksum mismatch for %s. Expected %s, got %s\n%!"
+          (red "ERR:") ofile c md5
+      else
+        eprintf "%s %s\n%!" (green "OK: ") ofile;
+    end;
     return_unit
   | `Moved_permanently | `Found -> begin
       match Cohttp.(Header.get (Response.headers resp) "location") with
       | None -> eprintf "%s Bad Found: %s\n" (red "ERR:") url; return_unit
-      | Some loc -> fetch ofile (Uri.of_string loc)
+      | Some loc -> fetch ofile (Uri.of_string loc) checksum
     end
   | c ->
     eprintf "%s %s: %s\n" (red "ERR:") (Cohttp.Code.string_of_status c) url;
@@ -76,18 +86,18 @@ let rec fetch ofile uri =
 let run (_,uris) threads =
   Lwt_main.run (
     let pool = Lwt_pool.create threads (fun () -> return_unit) in
-    Lwt_list.iter_p (fun (subdir,uri) ->
-      Lwt_pool.use pool (fun () ->
-          Lwt.catch (fun () ->
-              mkdir_p subdir >>= fun () ->
-              let fname = Uri.path uri |> Filename.basename in
-              fetch (subdir ^ fname) uri
-            ) (fun exn ->
-              Printf.eprintf "%s: %s %s\n%!" (red "EXC:") (Uri.to_string uri) (Printexc.to_string exn);
-              return_unit
-            )
-        )
-    ) uris)
+    Lwt_list.iter_p (fun (subdir, uri, checksum) ->
+        Lwt_pool.use pool (fun () ->
+            Lwt.catch (fun () ->
+                mkdir_p subdir >>= fun () ->
+                let fname = Uri.path uri |> Filename.basename in
+                fetch (subdir ^ fname) uri checksum
+              ) (fun exn ->
+                Printf.eprintf "%s: %s %s\n%!" (red "EXC:") (Uri.to_string uri) (Printexc.to_string exn);
+                return_unit
+              )
+          )
+      ) uris)
 
 open Cmdliner
 
@@ -99,7 +109,7 @@ let uri =
     parse, fun ppf (p,_) -> Format.fprintf ppf "%s" p
   in
   Arg.(required & pos 0 (some loc) None & info [] ~docv:"DIR"
-   ~doc:"Git directory of OPAM repository to mirror distfiles into")
+         ~doc:"Git directory of OPAM repository to mirror distfiles into")
 
 let parallel =
   let doc = "Number of parallel HTTP threads." in
