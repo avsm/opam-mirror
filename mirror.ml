@@ -16,12 +16,12 @@
  *)
 
 let get_urls dir =
+  Sys.chdir dir;
   let repo = OpamRepository.local (OpamFilename.Dir.of_string dir) in
   let packages = OpamRepository.packages_with_prefixes repo in
   OpamPackage.Map.fold
     (fun nv prefix map ->
       let name = OpamPackage.(Name.to_string (name nv)) in
-      if name <> "mirage" then map else begin
       let subdir =
         Printf.sprintf "distfiles/%s/%s.%s/" name name
           (OpamPackage.(Version.to_string (version nv))) in
@@ -33,7 +33,6 @@ let get_urls dir =
         let checksum = OpamFile.URL.checksum file in
         (subdir, address, checksum) :: map
       | false -> map
-end
     ) packages []
 
 open Lwt
