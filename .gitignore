@@ -2,3 +2,5 @@ _build
 setup.data
 setup.log
 .*.swp
+*.byte
+*.native
