@@ -15,9 +15,10 @@
  *
  *)
 
-
 open Lwt
 open Printf
+
+module PB = Lterm_progress_bar
 
 let get_urls file =
   (match file with "-" -> return Lwt_io.stdin | f -> Lwt_io.open_file ~mode:(Lwt_io.input) f) >>= fun ic ->
@@ -45,16 +46,26 @@ let rec mkdir_p dir =
      with Unix.Unix_error (Unix.EEXIST,_,_) -> ());
     return_unit
 
-let rec fetch ofile uri checksum =
+let rec fetch ofile uri checksum pbar =
   let url = Uri.to_string uri in
   Cohttp_lwt_unix.Client.get uri >>= fun (resp,body) ->
+  let len =
+    match Cohttp.Header.get_content_range (Cohttp.Response.headers resp) with
+    | None -> 1000000L (* guess length for progress bar *)
+    | Some l -> l in
+  let lenread = ref 0L in
   match Cohttp.Response.status resp with 
-  | `OK ->
-    eprintf "%s %s\n%!" (yellow "GET:") url;
+  | `OK -> (*    eprintf "%s %s\n%!" (yellow "GET:") url; *)
     Lwt_io.with_file ~mode:Lwt_io.output ofile
       (fun oc ->
-         Cohttp_lwt_body.to_stream body
-         |> Lwt_stream.iter_s (Lwt_io.write oc))
+        Cohttp_lwt_body.to_stream body |>
+        Lwt_stream.iter_s (fun b ->
+          lenread := Int64.add !lenread (Int64.of_int (String.length b));
+          let progress = (Int64.to_float !lenread) /. (Int64.to_float len) in
+          PB.update ~progress pbar;
+          Lwt_io.write oc b
+        )
+      )
     >>= fun () ->
     begin match checksum with
     | None -> eprintf "%s No checksum for %s\n%!" (yellow "MD5:") ofile
@@ -63,34 +74,42 @@ let rec fetch ofile uri checksum =
       if md5 <> c then
         eprintf "%s Checksum mismatch for %s. Expected %s, got %s\n%!"
           (red "ERR:") ofile c md5
-      else
-        eprintf "%s %s\n%!" (green "OK: ") ofile;
+      else (* eprintf "%s %s\n%!" (green "OK: ") ofile;*) ()
     end;
     return_unit
   | `Moved_permanently | `Found -> begin
       match Cohttp.(Header.get (Response.headers resp) "location") with
       | None -> eprintf "%s Bad Found: %s\n" (red "ERR:") url; return_unit
-      | Some loc -> fetch ofile (Uri.of_string loc) checksum
+      | Some loc -> fetch ofile (Uri.of_string loc) checksum pbar
     end
   | c ->
     eprintf "%s %s: %s\n" (red "ERR:") (Cohttp.Code.string_of_status c) url;
     return_unit
 
-module PB = Lterm_progress_bar
-
 let run (_,uris) threads odir =
   Sys.chdir odir;
   Lwt_main.run (
     let pbar = PB.make () in
+    let pactive = ref [] in
+    let add_pbar t = pactive := t :: !pactive in
+    let remove_pbar t = pactive := List.filter (fun x -> not (x == t)) !pactive in
     let total_uris = List.length uris in
     let fin_uris = ref 0 in
     let pool = Lwt_pool.create threads (fun () -> return_unit) in
+    let _ = Lwt_engine.on_timer 0.1 true (fun _ ->
+      let label = Printf.sprintf "%d/%d" !fin_uris total_uris in
+      PB.update ~label ~progress:((float !fin_uris) /. (float total_uris)) pbar;
+      async (fun () -> (PB.draw (pbar::!pactive)))
+    ) in
     Lwt_list.iter_p (fun (subdir, uri, checksum) ->
         Lwt_pool.use pool (fun () ->
             Lwt.catch (fun () ->
                 mkdir_p subdir >>= fun () ->
                 let fname = Uri.path uri |> Filename.basename in
-                fetch (subdir ^ fname) uri checksum >>= fun () ->
+                let pbar = PB.make ~label:fname () in
+                add_pbar pbar;
+                fetch (subdir ^ fname) uri checksum pbar >>= fun () ->
+                remove_pbar pbar;
                 incr fin_uris;
                 return_unit
               ) (fun exn ->

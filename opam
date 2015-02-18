@@ -21,4 +21,5 @@ depends: [
   "lwt" {>="2.4.3"}
   "opam-lib" {>="1.2.0"}
   "tls"
+  "lambda-term"
 ]

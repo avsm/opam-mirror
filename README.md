@@ -7,5 +7,10 @@ structure to the existing `archives/` directory.
 
 Assuming that you have an OPAM checkout in `~/git/opam-repository`, do:
 
-    opam-mirror -t <threads> ~/git/opam-repository
+    opam mirror-show-urls ~/git/opam-repository > package-list
+    opam mirror-fetch-urls package-list
+
+or
+
+    opam mirror-fetch-urls - | opam mirror-show-urls ~git/opam-repository
 
