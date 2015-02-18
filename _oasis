@@ -11,8 +11,17 @@ BuildTools:  ocamlbuild
 
 Executable "opam-mirror"
   Path:               .
-  MainIs:             mirror.ml
+  MainIs:             opam_mirror_fetch_urls.ml
   Custom:             true
   CompiledObject:     best
   Install:            true
-  BuildDepends:       cmdliner, cohttp.lwt, opam-lib, lwt.unix
+  BuildDepends:       cmdliner, cohttp.lwt, lwt.unix, lterm-progress-bar
+
+Executable "opam-get-mirror-urls"
+  Path:               .
+  MainIs:             opam_mirror_show_urls.ml
+  Custom:             true
+  CompiledObject:     best
+  Install:            false
+  BuildDepends:       cmdliner, opam-lib, uri
+

@@ -15,28 +15,22 @@
  *
  *)
 
-let get_urls dir =
-  Sys.chdir dir;
-  let repo = OpamRepository.local (OpamFilename.Dir.of_string dir) in
-  let packages = OpamRepository.packages_with_prefixes repo in
-  OpamPackage.Map.fold
-    (fun nv prefix map ->
-      let name = OpamPackage.(Name.to_string (name nv)) in
-      let subdir =
-        Printf.sprintf "distfiles/%s/%s.%s/" name name
-          (OpamPackage.(Version.to_string (version nv))) in
-      let url_file = OpamPath.Repository.url repo prefix nv in 
-      match OpamFilename.exists url_file with
-      | true ->
-        let file = OpamFile.URL.read url_file in
-        let address = fst (OpamFile.URL.url file) |> Uri.of_string in 
-        let checksum = OpamFile.URL.checksum file in
-        (subdir, address, checksum) :: map
-      | false -> map
-    ) packages []
 
 open Lwt
 open Printf
+
+let get_urls file =
+  (match file with "-" -> return Lwt_io.stdin | f -> Lwt_io.open_file ~mode:(Lwt_io.input) f) >>= fun ic ->
+  let lines = Lwt_io.read_lines ic in
+  let get_exn s = Lwt_stream.get s >>= function None -> fail Not_found | Some l -> return l in
+  let rec aux acc =
+    Lwt_stream.get lines >>= function
+    | None -> return acc
+    | Some subdir ->
+        (get_exn lines >|= Uri.of_string) >>= fun uri ->
+        (get_exn lines >|= function "" -> None | c -> Some c) >>= fun csum ->
+        aux ((subdir, uri, csum) :: acc)
+  in aux []
 
 let red fmt = Printf.sprintf ("\027[31m"^^fmt^^"\027[m")
 let green fmt = Printf.sprintf ("\027[32m"^^fmt^^"\027[m")
@@ -82,15 +76,22 @@ let rec fetch ofile uri checksum =
     eprintf "%s %s: %s\n" (red "ERR:") (Cohttp.Code.string_of_status c) url;
     return_unit
 
+module PB = Lterm_progress_bar
+
 let run (_,uris) threads =
   Lwt_main.run (
+    let pbar = PB.make () in
+    let total_uris = List.length uris in
+    let fin_uris = ref 0 in
     let pool = Lwt_pool.create threads (fun () -> return_unit) in
     Lwt_list.iter_p (fun (subdir, uri, checksum) ->
         Lwt_pool.use pool (fun () ->
             Lwt.catch (fun () ->
                 mkdir_p subdir >>= fun () ->
                 let fname = Uri.path uri |> Filename.basename in
-                fetch (subdir ^ fname) uri checksum
+                fetch (subdir ^ fname) uri checksum >>= fun () ->
+                incr fin_uris;
+                return_unit
               ) (fun exn ->
                 Printf.eprintf "%s: %s %s\n%!" (red "EXC:") (Uri.to_string uri) (Printexc.to_string exn);
                 return_unit
@@ -103,7 +104,7 @@ open Cmdliner
 let uri =
   let loc =
     let parse s =
-      try `Ok ((s, get_urls s))
+      try `Ok ((s, Lwt_main.run (get_urls s)))
       with _ -> `Error (s ^ " is not a valid OPAM repository Git checkout") in
     parse, fun ppf (p,_) -> Format.fprintf ppf "%s" p
   in
