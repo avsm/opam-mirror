@@ -20,10 +20,31 @@ open Printf
 
 module PB = Lterm_progress_bar
 
+(** General utility functions for Lwt-based code *)
+
+let open_file =
+  function
+  | "-" -> return Lwt_io.stdin
+  | file -> Lwt_io.open_file ~mode:Lwt_io.input file
+
+let get_exn s =
+  Lwt_stream.get s >>= function
+  | None -> fail Not_found
+  | Some l -> return l
+
+let rec mkdir_p dir =
+  match Sys.file_exists dir with
+  | true -> return_unit
+  | false ->
+    mkdir_p (Filename.dirname dir) >>= fun () ->
+    (try Unix.mkdir dir 0o700 
+     with Unix.Unix_error (Unix.EEXIST,_,_) -> ());
+    return_unit
+
+(** Parse the <pkg,uri,checksum> input format *)
 let get_urls file =
-  (match file with "-" -> return Lwt_io.stdin | f -> Lwt_io.open_file ~mode:(Lwt_io.input) f) >>= fun ic ->
-  let lines = Lwt_io.read_lines ic in
-  let get_exn s = Lwt_stream.get s >>= function None -> fail Not_found | Some l -> return l in
+  open_file file >|=
+  Lwt_io.read_lines >>= fun lines ->
   let rec aux acc =
     Lwt_stream.get lines >>= function
     | None -> return acc
@@ -36,15 +57,6 @@ let get_urls file =
 let red fmt = Printf.sprintf ("\027[31m"^^fmt^^"\027[m")
 let green fmt = Printf.sprintf ("\027[32m"^^fmt^^"\027[m")
 let yellow fmt = Printf.sprintf ("\027[33m"^^fmt^^"\027[m")
-
-let rec mkdir_p dir =
-  match Sys.file_exists dir with
-  | true -> return_unit
-  | false ->
-    mkdir_p (Filename.dirname dir) >>= fun () ->
-    (try Unix.mkdir dir 0o700 
-     with Unix.Unix_error (Unix.EEXIST,_,_) -> ());
-    return_unit
 
 let rec fetch ofile uri checksum pbar =
   let url = Uri.to_string uri in
