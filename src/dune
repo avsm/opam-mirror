@@ -1,0 +1,11 @@
+(executable
+  (name opam_mirror_fetch_urls)
+  (public_name opam-mirror-fetch-urls)
+  (modules lterm_progress_bar opam_mirror_fetch_urls)
+  (libraries cmdliner cohttp.lwt lwt.unix lambda-term))
+
+(executable
+  (name opam_mirror_show_urls)
+  (modules opam_mirror_show_urls)
+  (public_name opam-mirror-show-urls)
+  (libraries cmdliner opam-repository))
