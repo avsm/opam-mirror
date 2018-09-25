@@ -17,22 +17,35 @@
 
 let get_urls dir =
   Sys.chdir dir;
-  let repo = OpamRepository.local (OpamFilename.Dir.of_string dir) in
+  let repo = OpamRepositoryBackend.local (OpamFilename.Dir.of_string dir) in
   let packages = OpamRepository.packages_with_prefixes repo in
   OpamPackage.Map.fold
-    (fun nv prefix map ->
-      let name = OpamPackage.(Name.to_string (name nv)) in
+    (fun pkg prefix map ->
+      let name = OpamPackage.(Name.to_string (name pkg)) in
       let subdir =
         Printf.sprintf "distfiles/%s/%s.%s/" name name
-          (OpamPackage.(Version.to_string (version nv))) in
-      let url_file = OpamPath.Repository.url repo prefix nv in 
-      match OpamFilename.exists url_file with
-      | true ->
-        let file = OpamFile.URL.read url_file in
-        let address = fst (OpamFile.URL.url file) |> Uri.of_string in 
-        let checksum = OpamFile.URL.checksum file in
-        (subdir, address, checksum) :: map
-      | false -> map
+          (OpamPackage.(Version.to_string (version pkg))) in
+      let opam_filename = OpamRepositoryPath.opam (OpamFilename.Dir.of_string dir) prefix pkg in
+      try
+        let opam_file = OpamFile.OPAM.read opam_filename in
+        begin match opam_file.url with
+          | Some url ->
+            let address = OpamFile.URL.url url |> OpamUrl.to_string in
+            let checksum =
+              try
+                let h =
+                  (* TODO: handle all kind of hashes *)
+                  List.find (fun hash -> OpamHash.kind hash = `MD5)
+                    (OpamFile.URL.checksum url) in
+                Some (OpamHash.contents h)
+              with Not_found -> None
+            in
+            (subdir, address, checksum) :: map
+        | None ->
+          map
+        end
+      with OpamSystem.File_not_found _ ->
+        map
     ) packages []
 
 open Cmdliner
@@ -50,7 +63,7 @@ let uri =
 let run (_,uris) =
   List.iter (fun (subdir, address, csum) ->
     Printf.printf "%s\n%s\n%s\n" subdir
-      (Uri.to_string address)
+      address
       (match csum with None ->"" | Some c -> c)
   ) uris
 
